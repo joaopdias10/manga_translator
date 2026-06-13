@@ -1,2 +1,2 @@
-# webtoon_translator
-Webtoon translator
+# manga_translator
+Manga Translator
