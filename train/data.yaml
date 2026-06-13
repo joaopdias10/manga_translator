@@ -1,0 +1,7 @@
+path: .
+train: datasets/train
+val: datasets/val
+
+names:
+  0: eng
+

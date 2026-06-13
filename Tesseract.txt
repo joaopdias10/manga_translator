@@ -1,0 +1,6 @@
+Caso não tenha o instalado o tesseract(ocr), baixe por este link:
+https://github.com/UB-Mannheim/tesseract/wiki
+
+Instale e execute o programa, quando estiver executando coloque o seguinte caminho: C:\Program Files\Tesseract-OCR
+
+Caso já tenha instalado previamente, basta você substituir o caminho no arquivo main.py
