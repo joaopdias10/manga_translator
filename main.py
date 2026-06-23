@@ -26,16 +26,19 @@ for i,box in enumerate(results[0].boxes):
     x1, y1, x2, y2 = map(int, box.xyxy[0]) #coordenadas
 
     cropped = image[y1:y2, x1:x2] #recorta a imagem
-    config = r'--oem 3 --psm 6' #vi em um video e melhorou o resultado kk
+    #cv2.imwrite(f'scr_manga/outputs/recorte_{i}.jpg', cropped)
+
+    config = r'--oem 3 --psm 6' #vi em um video e melhorou o resultado do ocr kk
     text = pytesseract.image_to_string(cropped,config=config) #pega o texto da imagem
+
     text = re.sub(r'\s+', ' ', text).strip() #remove quebra de linha
-    #text = GoogleTranslator(source='en', target='pt').translate(text) #traduz balão
-    text = translate(text) #traduz balão usando meu script LangChain/translator.py
     text = text.capitalize() #formata o texto
+    #text = GoogleTranslator(source='en', target='pt').translate(text) #traduz balão
+    text = translate(text) #traduz balão usando translator/translator.py
 
     draw.rectangle([x1, y1, x2, y2], fill=(255, 255, 255)) #passa o "branco"
 
-    spell(draw, text, x1, y1, x2, y2, "font/KOMIKAX_.ttf")
+    spell(draw, text, x1, y1, x2, y2, "font/KOMIKAX_.ttf") #Escreve na imagem
 
 image_pil.save("scr_manga/outputs/2.jpeg") #salva a imagem com as alterações
 
