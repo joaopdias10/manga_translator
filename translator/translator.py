@@ -91,7 +91,7 @@ def _mymemory(texto, origem, destino):
 
 
 def _gemini(texto, origem, destino):
-    from translator.translator import translate  # import tardio: pode faltar .env
+    from translator.LLM_translator import translate  # import tardio: pode faltar .env
     return translate(texto)
 
 

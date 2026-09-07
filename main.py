@@ -1,11 +1,12 @@
-from ultralytics import YOLO
+import re
+
 import cv2
 import pytesseract
-import re
-from deep_translator import GoogleTranslator
 from PIL import Image, ImageDraw, ImageFont
-from translator.Google_translator import traduzir, resumo
+from ultralytics import YOLO
+
 from lettering.lettering import spell
+from translator.translator import resumo, traduzir
 
 pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
@@ -39,7 +40,7 @@ for i,box in enumerate(results[0].boxes):
     #traduz com cache + retry + fallback (translator/traducao.py)
     #usar_gemini=True usa translator/translator.py como motor principal
     text = traduzir(text, origem='en', destino='pt')
-    print(f"Balão {i+1}: {text}") #printa o balão
+    #print(f"Balão {i+1}: {text}") #printa o balão
 
     draw.rectangle([x1, y1, x2, y2], fill=(255, 255, 255)) #passa o "branco"
 
