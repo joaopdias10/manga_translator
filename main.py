@@ -2,16 +2,16 @@ from ultralytics import YOLO
 import cv2
 import pytesseract
 import re
-#from deep_translator import GoogleTranslator
+from deep_translator import GoogleTranslator
 from PIL import Image, ImageDraw, ImageFont
-from translator.translator import translate
+from translator.Google_translator import traduzir, resumo
 from lettering.lettering import spell
 
 pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 model = YOLO("train/runs/detect/train8/weights/best.pt") #pega o meu modelo treinado
 #model = YOLO("scr_manga/weights_AymanKUMA/best.pt") #pega o modelo que achei na internet
-image = cv2.imread("scr_manga/inputs/6.png") #carrega a imagem
+image = cv2.imread("scr_manga/inputs/1.jpeg") #carrega a imagem
 results = model(image) #passa a imagem pro modelo e recebe o resultado
 cv2.imwrite("scr_manga/outputs/resultado.jpg", results[0].plot()) #coloca a imagem resultante na pasta outputs
 
@@ -32,13 +32,19 @@ for i,box in enumerate(results[0].boxes):
     text = pytesseract.image_to_string(cropped,config=config) #pega o texto da imagem
 
     text = re.sub(r'\s+', ' ', text).strip() #remove quebra de linha
+    if not text: #balão sem texto: nada a traduzir
+        continue
     text = text.capitalize() #formata o texto
-    #text = GoogleTranslator(source='en', target='pt').translate(text) #traduz balão
-    text = translate(text) #traduz balão usando translator/translator.py
+
+    #traduz com cache + retry + fallback (translator/traducao.py)
+    #usar_gemini=True usa translator/translator.py como motor principal
+    text = traduzir(text, origem='en', destino='pt')
+    print(f"Balão {i+1}: {text}") #printa o balão
 
     draw.rectangle([x1, y1, x2, y2], fill=(255, 255, 255)) #passa o "branco"
 
     spell(draw, text, x1, y1, x2, y2, "font/KOMIKAX_.ttf") #Escreve na imagem
 
 image_pil.save("scr_manga/outputs/2.jpeg") #salva a imagem com as alterações
+#print(resumo()) #de onde veio cada tradução
 

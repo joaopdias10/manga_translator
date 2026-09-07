@@ -9,3 +9,5 @@ __pycache__/
 /translator/.env
 
 .env
+
+testarOCR_JP.txt
