@@ -5,6 +5,7 @@ import pytesseract
 from PIL import Image, ImageDraw, ImageFont
 from ultralytics import YOLO
 
+from inpaint.inpainter import remover_texto
 from lettering.lettering import spell
 from translator.translator import resumo, traduzir
 
@@ -12,12 +13,18 @@ pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tessera
 
 model = YOLO("train/runs/detect/train8/weights/best.pt") #pega o meu modelo treinado
 #model = YOLO("scr_manga/weights_AymanKUMA/best.pt") #pega o modelo que achei na internet
-image = cv2.imread("scr_manga/inputs/1.jpeg") #carrega a imagem
+image = cv2.imread("scr_manga/inputs/2.jpeg") #carrega a imagem
 results = model(image) #passa a imagem pro modelo e recebe o resultado
 cv2.imwrite("scr_manga/outputs/resultado.jpg", results[0].plot()) #coloca a imagem resultante na pasta outputs
 
 
-image_pil = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB)) #converte do opencv para pil
+#etapa 4: remove o texto original de todas as caixas de uma vez.
+#a `image` original fica intacta, entao o OCR do laço abaixo continua lendo o texto.
+caixas = [tuple(map(int, box.xyxy[0])) for box in results[0].boxes]
+image_limpa, relatorio = remover_texto(image, caixas, metodo="auto")
+cv2.imwrite("scr_manga/outputs/pagina_limpa.png", image_limpa) #resultado só da etapa 4
+
+image_pil = Image.fromarray(cv2.cvtColor(image_limpa, cv2.COLOR_BGR2RGB)) #converte do opencv para pil
 draw = ImageDraw.Draw(image_pil) #objeto de desenho
 font = ImageFont.truetype("arial.ttf", size=20)
 
@@ -42,7 +49,7 @@ for i,box in enumerate(results[0].boxes):
     text = traduzir(text, origem='en', destino='pt')
     #print(f"Balão {i+1}: {text}") #printa o balão
 
-    draw.rectangle([x1, y1, x2, y2], fill=(255, 255, 255)) #passa o "branco"
+    #draw.rectangle([x1, y1, x2, y2], fill=(255, 255, 255)) #passa o "branco"
 
     spell(draw, text, x1, y1, x2, y2, "font/KOMIKAX_.ttf") #Escreve na imagem
 
