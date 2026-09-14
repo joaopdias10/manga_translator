@@ -1,4 +1,0 @@
-https://pypi.org/project/manga-ocr/
-
-
-https://ai.google.dev/gemini-api/docs?hl=pt-br
