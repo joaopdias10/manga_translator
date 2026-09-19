@@ -11,3 +11,9 @@ __pycache__/
 .env
 
 testarOCR_JP.txt
+# pesos de inpainting (baixados a parte)
+inpaint/models/*.pt
+inpaint/models/*.onnx
+inpaint/models/*.ckpt
+
+Tesseract.txt

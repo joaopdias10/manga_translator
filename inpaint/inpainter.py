@@ -302,30 +302,67 @@ def inpaint_ns(recorte, mascara, raio=3):
     return cv2.inpaint(recorte, mascara, raio, cv2.INPAINT_NS)
 
 
-_lama = None
+# ---------------------------------------------------------------------------
+# Backends de rede neural (LaMa / AOT-GAN / MI-GAN)
+#
+# Nenhum peso vem no repositorio; baixe o que for usar para inpaint/models/
+# (ou aponte a variavel de ambiente indicada). Todos sao fine-tunados em
+# manga - o LaMa generico do simple-lama e treinado em fotografia e nao
+# serve para arte 1-bit.
+#
+#   lama       anime-manga-big-lama.pt   (TorchScript)  -> PADRAO da rota "arte"
+#              github.com/Sanster/models  release AnimeMangaInpainting
+#   lama_onnx  lama-manga-dynamic.onnx    (ONNX)   HF ogkalu/lama-manga-onnx-dynamic
+#   aot        aot.onnx                   (ONNX)   HF ogkalu/aot-inpainting
+#   migan      migan_pipeline_v2.onnx     (ONNX)   github.com/Sanster/models release migan
+#
+# torch ja e dependencia do projeto (ultralytics). Os backends ONNX pedem
+# `pip install onnxruntime`.
+# ---------------------------------------------------------------------------
+
+import os
+
+_MODELOS_DIR = os.path.join(os.path.dirname(__file__), "models")
+
+# engine: torch|onnx | norm: "0_1" (LaMa) / "-1_1" (AOT) / "migan"
+# zera: aplicar img*(1-mask) antes da inferencia | modulo: multiplo exigido
+_BACKENDS = {
+    "lama":      dict(engine="torch", arquivo="anime-manga-big-lama.pt",
+                      env="LAMA_MODEL",  norm="0_1",   zera=False, modulo=8),
+    "lama_onnx": dict(engine="onnx",  arquivo="lama-manga-dynamic.onnx",
+                      env="LAMA_ONNX",   norm="0_1",   zera=False, modulo=8),
+    "aot":       dict(engine="onnx",  arquivo="aot.onnx",
+                      env="AOT_ONNX",    norm="-1_1",  zera=True,  modulo=8),
+    "migan":     dict(engine="onnx",  arquivo="migan_pipeline_v2.onnx",
+                      env="MIGAN_ONNX",  norm="migan", zera=True,  modulo=512,
+                      quadrado=True),
+}
+
+_modelos = {}  # cache: nome -> (modelo, cfg)
 
 
-def _carregar_lama():
-    """
-    Carrega o LaMa uma unica vez.
-
-    IMPORTANTE: o simple-lama-inpainting baixa o big-lama ORIGINAL, treinado
-    em fotografia (Places/CelebA). Os projetos de referencia da area usam
-    checkpoints fine-tunados em manga:
-      manga-image-translator -> dreMaz/AnimeMangaInpainting (lama_large_512px)
-      koharu                 -> mayocream/lama-manga, mayocream/aot-inpainting
-    Para usar outro modelo TorchScript, aponte a variavel de ambiente
-    LAMA_MODEL para o arquivo .pt antes de rodar - o simple-lama a respeita.
-    """
-    global _lama
-    if _lama is None:
-        from simple_lama_inpainting import SimpleLama  # import tardio
-        _lama = SimpleLama()
-    return _lama
+def _obter_backend(nome):
+    """Carrega (uma vez) o modelo do backend. Levanta se o arquivo faltar."""
+    if nome in _modelos:
+        return _modelos[nome]
+    cfg = _BACKENDS[nome]
+    caminho = os.environ.get(cfg["env"]) or os.path.join(_MODELOS_DIR, cfg["arquivo"])
+    if not os.path.exists(caminho):
+        raise FileNotFoundError(
+            f"modelo '{nome}' nao encontrado em {caminho}. "
+            f"Baixe para inpaint/models/ ou defina a variavel {cfg['env']}.")
+    if cfg["engine"] == "torch":
+        import torch
+        modelo = torch.jit.load(caminho, map_location="cpu").eval()
+    else:
+        import onnxruntime as ort
+        modelo = ort.InferenceSession(caminho, providers=["CPUExecutionProvider"])
+    _modelos[nome] = (modelo, cfg)
+    return _modelos[nome]
 
 
 def _ajustar_para_modulo(img, modulo=8):
-    """LaMa exige lados multiplos de 8."""
+    """Ajusta os lados para multiplo de `modulo` (exigencia dos modelos)."""
     h, w = img.shape[:2]
     nh = h + (modulo - h % modulo) % modulo
     nw = w + (modulo - w % modulo) % modulo
@@ -335,44 +372,103 @@ def _ajustar_para_modulo(img, modulo=8):
     return cv2.resize(img, (nw, nh), interpolation=interp)
 
 
-def inpaint_lama(recorte, mascara, tamanho=512):
-    """
-    LaMa. Segue o pre-processamento dos projetos de referencia:
-    redimensiona mantendo proporcao ate `tamanho`, ajusta para multiplo de 8,
-    zera a area mascarada antes da inferencia e devolve a saida SO onde a
-    mascara esta - assim o modelo nao altera de leve o resto do recorte.
-    """
-    from PIL import Image
-
-    lama = _carregar_lama()
+def _preparar(recorte, mascara, cfg, tamanho):
+    """Redimensiona mantendo proporcao e ajusta forma. Devolve (rgb, mask01)."""
     h, w = recorte.shape[:2]
-
-    escala = tamanho / max(h, w) if max(h, w) > tamanho else 1.0
-    if escala != 1.0:
-        nw, nh = max(1, int(w * escala)), max(1, int(h * escala))
-        peq = cv2.resize(recorte, (nw, nh), interpolation=cv2.INTER_AREA)
-        m_peq = cv2.resize(mascara, (nw, nh), interpolation=cv2.INTER_NEAREST)
+    if cfg.get("quadrado"):
+        lado = cfg["modulo"]  # MI-GAN: quadrado fixo (512)
+        rec = cv2.resize(recorte, (lado, lado), interpolation=cv2.INTER_AREA)
+        msk = cv2.resize(mascara, (lado, lado), interpolation=cv2.INTER_NEAREST)
     else:
-        peq, m_peq = recorte, mascara
+        escala = tamanho / max(h, w) if max(h, w) > tamanho else 1.0
+        if escala != 1.0:
+            nw, nh = max(1, int(w * escala)), max(1, int(h * escala))
+            rec = cv2.resize(recorte, (nw, nh), interpolation=cv2.INTER_AREA)
+            msk = cv2.resize(mascara, (nw, nh), interpolation=cv2.INTER_NEAREST)
+        else:
+            rec, msk = recorte, mascara
+        rec = _ajustar_para_modulo(rec, cfg["modulo"])
+        msk = _ajustar_para_modulo(msk, cfg["modulo"])
+    rgb = cv2.cvtColor(rec, cv2.COLOR_BGR2RGB)
+    msk = ((msk > 127) * 255).astype(np.uint8)
+    return rgb, msk
 
-    peq = _ajustar_para_modulo(peq)
-    m_peq = _ajustar_para_modulo(m_peq)
-    m_peq = ((m_peq > 127) * 255).astype(np.uint8)
 
-    # Zera o que sera reconstruido (o modelo nao deve ver o texto).
-    peq = peq.copy()
-    peq[m_peq > 0] = 0
+def _rodar_modelo(nome, recorte, mascara, tamanho=512):
+    """
+    Passa o recorte por um dos modelos e devolve o BGR reconstruido no
+    tamanho original, escrevendo SO onde a mascara esta (o resto do recorte
+    fica intocado). Convencoes copiadas do comic-translate.
+    """
+    modelo, cfg = _obter_backend(nome)
+    h, w = recorte.shape[:2]
+    rgb, msk = _preparar(recorte, mascara, cfg, tamanho)
+    m01 = (msk > 0).astype(np.float32)
 
-    rgb = Image.fromarray(cv2.cvtColor(peq, cv2.COLOR_BGR2RGB))
-    resultado = lama(rgb, Image.fromarray(m_peq))
+    if cfg["norm"] == "migan":
+        # pipeline MI-GAN: uint8, mascara 0=apagar / 255=manter
+        conhecido = np.where(msk > 120, 0, 255).astype(np.uint8)
+        img_nchw = np.transpose(rgb, (2, 0, 1))[None].astype(np.uint8)
+        mask_nchw = conhecido[None, None]
+        nomes = [i.name for i in modelo.get_inputs()]
+        saida = modelo.run(None, {nomes[0]: img_nchw, nomes[1]: mask_nchw})[0]
+        out_rgb = np.transpose(saida[0], (1, 2, 0)).astype(np.uint8)
 
-    saida = cv2.cvtColor(np.array(resultado), cv2.COLOR_RGB2BGR)
-    if saida.shape[:2] != (h, w):
-        saida = cv2.resize(saida, (w, h), interpolation=cv2.INTER_LINEAR)
+    elif cfg["engine"] == "onnx":
+        if cfg["norm"] == "0_1":
+            img = rgb.astype(np.float32) / 255.0
+        else:  # -1_1
+            img = rgb.astype(np.float32) / 127.5 - 1.0
+        if cfg["zera"]:
+            img = img * (1 - m01[..., None])
+        img_nchw = np.transpose(img, (2, 0, 1))[None]
+        mask_nchw = m01[None, None]
+        nomes = [i.name for i in modelo.get_inputs()]
+        saida = modelo.run(None, {nomes[0]: img_nchw, nomes[1]: mask_nchw})[0]
+        arr = saida[0].transpose(1, 2, 0)
+        if cfg["norm"] == "0_1":
+            out_rgb = np.clip(arr * 255, 0, 255).astype(np.uint8)
+        else:
+            out_rgb = np.clip((arr + 1.0) * 127.5, 0, 255).astype(np.uint8)
+
+    else:  # torch (LaMa / AOT TorchScript)
+        import torch
+        if cfg["norm"] == "0_1":
+            img_t = torch.from_numpy(rgb).permute(2, 0, 1).unsqueeze(0).float() / 255.0
+        else:
+            img_t = torch.from_numpy(rgb).permute(2, 0, 1).unsqueeze(0).float() / 127.5 - 1.0
+        mask_t = torch.from_numpy(m01).unsqueeze(0).unsqueeze(0)
+        if cfg["zera"]:
+            img_t = img_t * (1 - mask_t)
+        with torch.inference_mode():
+            saida = modelo(img_t, mask_t)
+        arr = saida[0].float().permute(1, 2, 0).cpu().numpy()
+        if cfg["norm"] == "0_1":
+            out_rgb = np.clip(arr * 255, 0, 255).astype(np.uint8)
+        else:
+            out_rgb = np.clip((arr + 1.0) * 127.5, 0, 255).astype(np.uint8)
+
+    saida_bgr = cv2.cvtColor(out_rgb, cv2.COLOR_RGB2BGR)
+    if saida_bgr.shape[:2] != (h, w):
+        saida_bgr = cv2.resize(saida_bgr, (w, h), interpolation=cv2.INTER_LINEAR)
 
     final = recorte.copy()
-    final[mascara > 0] = saida[mascara > 0]
+    final[mascara > 0] = saida_bgr[mascara > 0]
     return final
+
+
+def _fazer_metodo(nome):
+    """Cria a funcao inpaint_<nome>(recorte, mascara) para o METODOS."""
+    def _m(recorte, mascara):
+        return _rodar_modelo(nome, recorte, mascara)
+    _m.__name__ = f"inpaint_{nome}"
+    return _m
+
+
+inpaint_lama = _fazer_metodo("lama")            # PADRAO da rota "arte"
+inpaint_lama_onnx = _fazer_metodo("lama_onnx")
+inpaint_aot = _fazer_metodo("aot")
+inpaint_migan = _fazer_metodo("migan")
 
 
 METODOS = {
@@ -380,6 +476,9 @@ METODOS = {
     "telea": inpaint_telea,
     "ns": inpaint_ns,
     "lama": inpaint_lama,
+    "lama_onnx": inpaint_lama_onnx,
+    "aot": inpaint_aot,
+    "migan": inpaint_migan,
 }
 
 
