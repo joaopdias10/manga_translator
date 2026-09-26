@@ -145,7 +145,8 @@ def gerar_mascara(recorte, caixa_texto=None, dilatacao=None, iteracoes=2,
                   partir da mascara inflada ja cai fora do balao.
     """
     if recorte.size == 0:
-        return np.zeros(recorte.shape[:2], np.uint8)
+        vazia = np.zeros(recorte.shape[:2], np.uint8)
+        return (vazia, vazia.copy()) if retornar_base else vazia
 
     cinza = cv2.cvtColor(recorte, cv2.COLOR_BGR2GRAY)
     cinza = cv2.fastNlMeansDenoising(cinza, None, 5, 7, 21)
@@ -186,7 +187,9 @@ def gerar_mascara(recorte, caixa_texto=None, dilatacao=None, iteracoes=2,
     base = mascara.copy()
 
     if dilatacao is None:
-        dilatacao = int(np.clip(round(altura_glifo * 0.30), 3, 9))
+        # lado impar: MORPH_ELLIPSE de lado par nao tem centro e a mascara
+        # "anda" numa direcao fixa a cada iteracao da dilatacao.
+        dilatacao = int(np.clip(round(altura_glifo * 0.30), 3, 9)) | 1
     if dilatacao > 0:
         k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
                                       (dilatacao, dilatacao))
@@ -506,6 +509,15 @@ def limpar_regiao(imagem, caixa, metodo="auto", margem=8, dilatacao=None):
     caixa_local = (x1 - ax1, y1 - ay1, x2 - ax1, y2 - ay1)
     mascara, base = gerar_mascara(recorte, caixa_texto=caixa_local,
                                   dilatacao=dilatacao, retornar_base=True)
+
+    # Sem pixels de texto na mascara: nao ha o que apagar. Sair aqui evita
+    # rodar o modelo caro a toa (o classificar_regiao devolveria "arte" ->
+    # "lama" e o inpaint nao mudaria um pixel) e deixa explicito no relatorio
+    # que a regiao ficou intocada - texto residual atras do lettering.
+    if not mascara.any():
+        return imagem, {"tipo": "vazio", "metodo": "nenhum", "tempo": 0.0,
+                        "cobertura": 0.0}
+
     tipo = classificar_regiao(recorte, base)  # analisa pela mascara crua
 
     if metodo == "auto":
@@ -520,8 +532,11 @@ def limpar_regiao(imagem, caixa, metodo="auto", margem=8, dilatacao=None):
             limpo = inpaint_solido(recorte, mascara, base=base)
         else:
             limpo = METODOS[escolhido](recorte, mascara)
-    except Exception as e:
-        # LaMa indisponivel (pacote/modelo ausente): cai para o Telea.
+    except (FileNotFoundError, ImportError, OSError, RuntimeError) as e:
+        # Modelo/runtime indisponivel (peso ou pacote ausente, erro de
+        # inferencia): cai para o Telea. Nao capturamos Exception generico
+        # para nao mascarar bugs de logica do _rodar_modelo como "modelo
+        # indisponivel".
         print(f"    [inpaint] {escolhido} falhou ({type(e).__name__}), usando telea")
         escolhido = "telea"
         limpo = inpaint_telea(recorte, mascara)
