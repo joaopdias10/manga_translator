@@ -1,17 +1,18 @@
-from dotenv import load_dotenv
+import json
 import os
-from langchain_core.output_parsers import StrOutputParser
-from langchain_google_genai import ChatGoogleGenerativeAI
-#from langchain_openai import ChatOpenAI
-from langchain_core.prompts import ChatPromptTemplate
 
+from dotenv import load_dotenv
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 
 load_dotenv()
 chave_api_Gemini = os.getenv("Google_Api_Key")
-#chave_api_Gpt = os.getenv("OpenAI_Api_Key")
+chave_api_Gpt = os.getenv("OpenAI_Api_Key")
 
 mensagens = ChatPromptTemplate.from_messages([
-    ("system", "Você é um tradutor especializado em mangás. Traduza o texto a seguir para o português do Brasil, mantendo o tom natural e ajustando possíveis erros de gramática ou coerência. Considere que a tradução é no contexto do mangá Blue Lock. Expressões de impacto devem ser preservados para que o leitor entenda futuras falas e balões, adapte também onomatopeias quando necessário, mas sem perder o estilo do mangá. A ideia principal é que o leitor sinta que está lendo o mangá em português, e não apenas uma tradução literal.\n\n"
+    ("system", "Você é um tradutor especializado em mangás. Traduza o texto a seguir para o português do Brasil, mantendo o tom natural e ajustando possíveis erros de gramática ou coerência. Considere que a tradução é no contexto do mangá Blue Lock. Expressões de impacto devem ser preservados para que o leitor entenda futuras falas e balões, adapte também onomatopeias quando necessário, mas sem perder o estilo do mangá. A ideia principal é que o leitor sinta que está lendo o mangá em português, e não apenas uma tradução literal.\n\n"  # noqa: ISC004
     "REGRAS CRUCIAIS E ABSOLUTAS:\n"
     "- Retorne apenas a tradução final.\n"
     "- Nunca adicione aspas, introduções, explicações.\n"
@@ -20,8 +21,8 @@ mensagens = ChatPromptTemplate.from_messages([
 ])
 
 #modelo = ChatGoogleGenerativeAI(model="gemini-1.5-flash") #Carrega o Gemini
-modelo = ChatGoogleGenerativeAI(model="gemini-3.5-flash", google_api_key=chave_api_Gemini, temperature=0.0)
-#modelo = ChatOpenAI(model="gpt-4o-mini") #Carrega o GPT - MT "caro"
+#modelo = ChatGoogleGenerativeAI(model="gemini-3.5-flash", google_api_key=chave_api_Gemini, temperature=0.0)
+modelo = ChatOpenAI(model="gpt-4o-mini", api_key=chave_api_Gpt, temperature=0.0) #Carrega o GPT
 
 parser = StrOutputParser() #Extrator da mensagem
 chain = mensagens | modelo | parser #corrente de passos
@@ -29,3 +30,27 @@ chain = mensagens | modelo | parser #corrente de passos
 def translate(text: str) -> str:
     return chain.invoke({"text": text})
 
+
+
+#--- traducao da pagina inteira -------------------------------------------
+#todos os baloes vao numa chamada so, em ordem de leitura, para o modelo
+#entender a conversa (quem fala com quem, tom, erros de OCR pelo contexto)
+mensagens_pagina = ChatPromptTemplate.from_messages([
+    ("system", "Você é um tradutor especializado em mangás. Você vai receber todos os balões de UMA página do mangá Blue Lock, numerados na ordem de leitura. Eles formam uma conversa: use o contexto dos outros balões para traduzir cada um. Traduza para o português do Brasil, mantendo o tom natural e ajustando possíveis erros de gramática ou coerência (o texto veio de OCR e pode ter letras trocadas). Expressões de impacto devem ser preservadas, adapte também onomatopeias quando necessário, mas sem perder o estilo do mangá. A ideia principal é que o leitor sinta que está lendo o mangá em português, e não apenas uma tradução literal.\n\n"
+    "REGRAS CRUCIAIS E ABSOLUTAS:\n"
+    "- Frases curtas: a tradução precisa caber no mesmo balão.\n"
+    "- Responda SOMENTE com um JSON no formato {{\"1\": \"tradução\", \"2\": \"tradução\", ...}}, com exatamente as mesmas chaves recebidas.\n"
+    "- Nunca adicione explicações ou texto fora do JSON."),
+    ("user", "{text}"),
+])
+
+chain_pagina = mensagens_pagina | modelo | parser
+
+def translate_page(textos: list[str]) -> list[str]:
+    if not textos:
+        return []
+    entrada = {str(i + 1): t for i, t in enumerate(textos)}
+    resposta = chain_pagina.invoke({"text": json.dumps(entrada, ensure_ascii=False, indent=1)})
+    resposta = resposta[resposta.find("{"):resposta.rfind("}") + 1] #tira ```json ... ``` se vier
+    saida = json.loads(resposta)
+    return [saida.get(str(i + 1), t) for i, t in enumerate(textos)] #se faltar algum, mantem o original

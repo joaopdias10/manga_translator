@@ -7,13 +7,14 @@ from ultralytics import YOLO
 
 from inpaint.inpainter import remover_texto
 from lettering.lettering import spell
+from translator.LLM_translator import translate_page
 from translator.translator import resumo, traduzir
 
 pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 model = YOLO("train/runs/detect/train8/weights/best.pt") #pega o meu modelo treinado
 #model = YOLO("scr_manga/weights_AymanKUMA/best.pt") #pega o modelo que achei na internet
-image = cv2.imread("scr_manga/inputs/2.jpeg") #carrega a imagem
+image = cv2.imread("scr_manga/inputs/3.jpeg") #carrega a imagem
 results = model(image) #passa a imagem pro modelo e recebe o resultado
 cv2.imwrite("scr_manga/outputs/resultado.jpg", results[0].plot()) #coloca a imagem resultante na pasta outputs
 
@@ -30,6 +31,8 @@ font = ImageFont.truetype("arial.ttf", size=20)
 
 #balloon = len(results[0].boxes) #numero de baloes de fala
 
+baloes = [] #(coordenadas, texto) de cada balao com texto
+
 for i,box in enumerate(results[0].boxes):
     x1, y1, x2, y2 = map(int, box.xyxy[0]) #coordenadas
 
@@ -44,14 +47,18 @@ for i,box in enumerate(results[0].boxes):
         continue
     text = text.capitalize() #formata o texto
 
-    #traduz com cache + retry + fallback (translator/traducao.py)
-    #usar_gemini=True usa translator/translator.py como motor principal
-    text = traduzir(text, origem='en', destino='pt')
-    #print(f"Balão {i+1}: {text}") #printa o balão
+    baloes.append(((x1, y1, x2, y2), text)) #guarda pra traduzir a pagina toda de uma vez
 
-    #draw.rectangle([x1, y1, x2, y2], fill=(255, 255, 255)) #passa o "branco"
+#ordem de leitura de mangá: de cima pra baixo, da direita pra esquerda
+baloes.sort(key=lambda b: (b[0][1] // 100, -b[0][2]))
 
-    spell(draw, text, x1, y1, x2, y2, "font/KOMIKAX_.ttf") #Escreve na imagem
+#traduz a pagina inteira numa chamada so ao Gemini (com contexto entre os baloes)
+textos = [t for _, t in baloes]
+traducoes = translate_page(textos)
+
+for i, ((x1, y1, x2, y2), traducao) in enumerate(zip([c for c, _ in baloes], traducoes)):
+    print(f"Balão {i+1}: {textos[i]} -> {traducao}") #printa o balão
+    spell(draw, traducao, x1, y1, x2, y2, "font/KOMIKAX_.ttf") #Escreve na imagem
 
 image_pil.save("scr_manga/outputs/2.jpeg") #salva a imagem com as alterações
 #print(resumo()) #de onde veio cada tradução
