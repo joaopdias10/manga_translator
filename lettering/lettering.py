@@ -31,6 +31,12 @@ _TAMANHO_REF = 100
 TAMANHO_MIN = 12
 TAMANHO_MAX = 80
 
+# Piso absoluto: quando o texto nao cabe nem em TAMANHO_MIN, e melhor encolher
+# abaixo do minimo "confortavel" do que deixar o bloco vazar por cima da arte
+# e da borda do painel. Texto pequeno que cabe no balao > texto legivel que
+# invade o quadro vizinho.
+_TAMANHO_PISO = 7
+
 
 # --------------------------------------------------------------------------
 # Cache de fontes e medições
@@ -202,16 +208,20 @@ def best_font(texto, largura_box, altura_box, caminho_fonte,
 
     tamanho = melhor[0] if melhor else tamanho_min
 
-    # Verificação exata com a fonte real (a escala de referência tem erro
-    # de arredondamento de subpixel). Se estourou, desce de 1 em 1.
-    for _ in range(4):
+    # Verificação exata com a fonte real (a escala de referência tem erro de
+    # arredondamento de subpixel). Se estourou, desce de 1 em 1 até caber -
+    # inclusive ABAIXO de tamanho_min, até o piso absoluto: texto que vaza por
+    # cima do painel de cima e pior que texto miúdo que cabe no balão.
+    piso = min(tamanho_min, _TAMANHO_PISO)
+    tamanho = max(tamanho, piso)
+    for _ in range(tamanho - piso + 1):
         fonte = carregar_fonte(caminho_fonte, tamanho)
         ascent, descent = fonte.getmetrics()
         altura_linha = ascent + descent
         espacamento = descent * 0.5
         linhas = wrap_text(texto, largura_box, fonte)
         total = len(linhas) * altura_linha + (len(linhas) - 1) * espacamento
-        if total <= altura_box or tamanho <= tamanho_min:
+        if total <= altura_box or tamanho <= piso:
             return fonte, linhas, altura_linha, espacamento
         tamanho -= 1
 
@@ -246,6 +256,12 @@ def spell(draw, texto, x1, y1, x2, y2, caminho_fonte="arial.ttf",
     altura_bloco = len(linhas) * altura_linha + (len(linhas) - 1) * espacamento
     centro_x = (x1 + x2) / 2
     y = y1 + ((y2 - y1) - altura_bloco) / 2
+
+    # Se o bloco ainda for mais alto que o balão (texto longo demais mesmo no
+    # piso), a centralização jogaria o topo para cima de y1, invadindo a arte
+    # e o painel de cima. Prende no topo da caixa: o excesso vaza só para
+    # baixo, dentro do próprio balão/painel.
+    y = max(y1 + padding_y, y)
 
     # anchor="ma" = centralizado na horizontal, topo (ascender) na vertical:
     # o Pillow centraliza sozinho, então não remedimos cada linha aqui.
