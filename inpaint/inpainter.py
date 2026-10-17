@@ -525,11 +525,23 @@ def limpar_regiao(imagem, caixa, metodo="auto", margem=8, dilatacao=None):
     else:
         escolhido = metodo
 
+    # Em balao chapado, apagar o INTERIOR inteiro cobre o texto todo de uma
+    # vez - inclusive furigana e pontas finas de traco que o mask de glifos
+    # perde (era a fonte dos "pontinhos"). O interior ja vem recortado pela
+    # linha do balao (erosao em interior_do_balao), entao nao estoura o
+    # contorno nem come o fundo escuro ao redor. So vale para a rota solido;
+    # quando nao ha interior plausivel (None), cai no mask de glifos.
+    mascara_fill = mascara
+    if escolhido == "solido":
+        interior = interior_do_balao(recorte, caixa_local)
+        if interior is not None:
+            mascara_fill = interior
+
     inicio = time.perf_counter()
     try:
         if escolhido == "solido":
             # cor amostrada pelo anel da mascara CRUA (dentro do balao)
-            limpo = inpaint_solido(recorte, mascara, base=base)
+            limpo = inpaint_solido(recorte, mascara_fill, base=base)
         else:
             limpo = METODOS[escolhido](recorte, mascara)
     except (FileNotFoundError, ImportError, OSError, RuntimeError) as e:
@@ -543,7 +555,7 @@ def limpar_regiao(imagem, caixa, metodo="auto", margem=8, dilatacao=None):
     tempo = time.perf_counter() - inicio
 
     imagem[ay1:ay2, ax1:ax2] = limpo
-    cobertura = float((mascara > 0).mean())
+    cobertura = float((mascara_fill > 0).mean())
     return imagem, {"tipo": tipo, "metodo": escolhido, "tempo": tempo,
                     "cobertura": cobertura}
 
