@@ -329,11 +329,18 @@ _MODELOS_DIR = os.path.join(os.path.dirname(__file__), "models")
 
 # engine: torch|onnx | norm: "0_1" (LaMa) / "-1_1" (AOT) / "migan"
 # zera: aplicar img*(1-mask) antes da inferencia | modulo: multiplo exigido
+# tamanho: lado maximo na inferencia. Reduzir demais engrossa o traco do
+#   texto no recorte reduzido e o LaMa passa a PRESERVA-lo como estrutura
+#   (deixa fantasma) em vez de apaga-lo. 1024 processa a maioria dos recortes
+#   perto do nativo; so recortes gigantes sao reduzidos (e ainda assim melhor
+#   que os 512 de antes).
 _BACKENDS = {
     "lama":      dict(engine="torch", arquivo="anime-manga-big-lama.pt",
-                      env="LAMA_MODEL",  norm="0_1",   zera=False, modulo=8),
+                      env="LAMA_MODEL",  norm="0_1",   zera=False, modulo=8,
+                      tamanho=1024),
     "lama_onnx": dict(engine="onnx",  arquivo="lama-manga-dynamic.onnx",
-                      env="LAMA_ONNX",   norm="0_1",   zera=False, modulo=8),
+                      env="LAMA_ONNX",   norm="0_1",   zera=False, modulo=8,
+                      tamanho=1024),
     "aot":       dict(engine="onnx",  arquivo="aot.onnx",
                       env="AOT_ONNX",    norm="-1_1",  zera=True,  modulo=8),
     "migan":     dict(engine="onnx",  arquivo="migan_pipeline_v2.onnx",
@@ -364,24 +371,34 @@ def _obter_backend(nome):
     return _modelos[nome]
 
 
-def _ajustar_para_modulo(img, modulo=8):
-    """Ajusta os lados para multiplo de `modulo` (exigencia dos modelos)."""
+def _ajustar_para_modulo(img, modulo=8, borda=cv2.BORDER_REFLECT):
+    """
+    Ajusta os lados para multiplo de `modulo` (exigencia dos modelos)
+    PREENCHENDO a borda - nao redimensionando. O resize distorcia o aspecto e
+    deixava a saida do modelo instavel: o MESMO recorte alternava entre apagar
+    limpo e deixar texto fantasma conforme as dimensoes mudavam uns poucos
+    pixels. A borda extra e recortada de volta depois da inferencia.
+    """
     h, w = img.shape[:2]
     nh = h + (modulo - h % modulo) % modulo
     nw = w + (modulo - w % modulo) % modulo
     if (nh, nw) == (h, w):
         return img
-    interp = cv2.INTER_NEAREST if img.ndim == 2 else cv2.INTER_LINEAR
-    return cv2.resize(img, (nw, nh), interpolation=interp)
+    return cv2.copyMakeBorder(img, 0, nh - h, 0, nw - w, borda)
 
 
 def _preparar(recorte, mascara, cfg, tamanho):
-    """Redimensiona mantendo proporcao e ajusta forma. Devolve (rgb, mask01)."""
+    """
+    Redimensiona mantendo proporcao e ajusta forma. Devolve
+    (rgb, mask01, (sh, sw)), onde (sh, sw) e o tamanho ANTES do padding de
+    modulo - usado para recortar a saida do modelo antes de voltar ao original.
+    """
     h, w = recorte.shape[:2]
     if cfg.get("quadrado"):
         lado = cfg["modulo"]  # MI-GAN: quadrado fixo (512)
         rec = cv2.resize(recorte, (lado, lado), interpolation=cv2.INTER_AREA)
         msk = cv2.resize(mascara, (lado, lado), interpolation=cv2.INTER_NEAREST)
+        sh, sw = lado, lado
     else:
         escala = tamanho / max(h, w) if max(h, w) > tamanho else 1.0
         if escala != 1.0:
@@ -390,11 +407,14 @@ def _preparar(recorte, mascara, cfg, tamanho):
             msk = cv2.resize(mascara, (nw, nh), interpolation=cv2.INTER_NEAREST)
         else:
             rec, msk = recorte, mascara
+        sh, sw = rec.shape[:2]
+        # imagem reflete a borda; mascara preenche com 0 (nao inpaintar o
+        # padding, que sera recortado fora de qualquer forma).
         rec = _ajustar_para_modulo(rec, cfg["modulo"])
-        msk = _ajustar_para_modulo(msk, cfg["modulo"])
+        msk = _ajustar_para_modulo(msk, cfg["modulo"], borda=cv2.BORDER_CONSTANT)
     rgb = cv2.cvtColor(rec, cv2.COLOR_BGR2RGB)
     msk = ((msk > 127) * 255).astype(np.uint8)
-    return rgb, msk
+    return rgb, msk, (sh, sw)
 
 
 def _rodar_modelo(nome, recorte, mascara, tamanho=512):
@@ -405,7 +425,7 @@ def _rodar_modelo(nome, recorte, mascara, tamanho=512):
     """
     modelo, cfg = _obter_backend(nome)
     h, w = recorte.shape[:2]
-    rgb, msk = _preparar(recorte, mascara, cfg, tamanho)
+    rgb, msk, (sh, sw) = _preparar(recorte, mascara, cfg, cfg.get("tamanho", tamanho))
     m01 = (msk > 0).astype(np.float32)
 
     if cfg["norm"] == "migan":
@@ -452,6 +472,8 @@ def _rodar_modelo(nome, recorte, mascara, tamanho=512):
             out_rgb = np.clip((arr + 1.0) * 127.5, 0, 255).astype(np.uint8)
 
     saida_bgr = cv2.cvtColor(out_rgb, cv2.COLOR_RGB2BGR)
+    # recorta o padding de modulo (borda refletida) antes de voltar ao original
+    saida_bgr = saida_bgr[:sh, :sw]
     if saida_bgr.shape[:2] != (h, w):
         saida_bgr = cv2.resize(saida_bgr, (w, h), interpolation=cv2.INTER_LINEAR)
 
