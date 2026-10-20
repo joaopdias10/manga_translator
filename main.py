@@ -1,20 +1,24 @@
-import re
+import sys
 
 import cv2
-import pytesseract
 from PIL import Image, ImageDraw, ImageFont
 from ultralytics import YOLO
 
 from inpaint.inpainter import remover_texto
 from lettering.lettering import spell
+from ocr.ocr import IDIOMAS, decidir_idiomas, ler
 from translator.LLM_translator import translate_page
 from translator.translator import resumo, traduzir
 
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+#uso: python main.py [imagem]
+ENTRADA = sys.argv[1] if len(sys.argv) > 1 else "scr_manga/inputs/example_original.jpg"
 
-model = YOLO("train/runs/detect/train8/weights/best.pt") #pega o meu modelo treinado
+#model = YOLO("train/runs/detect/train8/weights/best.pt") #pega o meu modelo treinado
+model = YOLO("train/runs/v1/best_lote12.pt") #pega o meu modelo v1 treinado
 #model = YOLO("scr_manga/weights_AymanKUMA/best.pt") #pega o modelo que achei na internet
-image = cv2.imread("scr_manga/inputs/3.jpeg") #carrega a imagem
+image = cv2.imread(ENTRADA) #carrega a imagem
+if image is None:
+    sys.exit(f"nao consegui abrir {ENTRADA}")
 results = model(image) #passa a imagem pro modelo e recebe o resultado
 cv2.imwrite("scr_manga/outputs/resultado.jpg", results[0].plot()) #coloca a imagem resultante na pasta outputs
 
@@ -29,37 +33,34 @@ image_pil = Image.fromarray(cv2.cvtColor(image_limpa, cv2.COLOR_BGR2RGB)) #conve
 draw = ImageDraw.Draw(image_pil) #objeto de desenho
 font = ImageFont.truetype("arial.ttf", size=20)
 
-#balloon = len(results[0].boxes) #numero de baloes de fala
+#etapa 2: o idioma de cada caixa vem da classe do YOLO (ENG ou JP)
+idiomas = decidir_idiomas(results[0])
+print("[idioma]", {k: idiomas.count(k) for k in IDIOMAS if k in idiomas})
 
-baloes = [] #(coordenadas, texto) de cada balao com texto
+baloes = [] #(coordenadas, texto, idioma) de cada balao com texto
 
-for i,box in enumerate(results[0].boxes):
-    x1, y1, x2, y2 = map(int, box.xyxy[0]) #coordenadas
-
+for i, (x1, y1, x2, y2) in enumerate(caixas):
     cropped = image[y1:y2, x1:x2] #recorta a imagem
     #cv2.imwrite(f'scr_manga/outputs/recorte_{i}.jpg', cropped)
 
-    config = r'--oem 3 --psm 6' #vi em um video e melhorou o resultado do ocr kk
-    text = pytesseract.image_to_string(cropped,config=config) #pega o texto da imagem
-
-    text = re.sub(r'\s+', ' ', text).strip() #remove quebra de linha
+    #ingles -> Tesseract, japones -> Manga-OCR
+    text = ler(cropped, idiomas[i])
     if not text: #balão sem texto: nada a traduzir
         continue
-    text = text.capitalize() #formata o texto
 
-    baloes.append(((x1, y1, x2, y2), text)) #guarda pra traduzir a pagina toda de uma vez
+    baloes.append(((x1, y1, x2, y2), text, idiomas[i])) #guarda pra traduzir a pagina toda de uma vez
 
 #ordem de leitura de mangá: de cima pra baixo, da direita pra esquerda
 baloes.sort(key=lambda b: (b[0][1] // 100, -b[0][2]))
 
-#traduz a pagina inteira numa chamada so ao Gemini (com contexto entre os baloes)
-textos = [t for _, t in baloes]
-traducoes = translate_page(textos)
+#traduz a pagina inteira numa chamada so (com contexto entre os baloes)
+textos = [t for _, t, _ in baloes]
+idiomas_pagina = sorted({idi for _, _, idi in baloes})
+traducoes = translate_page(textos, idiomas=idiomas_pagina)
 
-for i, ((x1, y1, x2, y2), traducao) in enumerate(zip([c for c, _ in baloes], traducoes)):
-    print(f"Balão {i+1}: {textos[i]} -> {traducao}") #printa o balão
+for i, ((x1, y1, x2, y2), traducao) in enumerate(zip([c for c, _, _ in baloes], traducoes)):
+    print(f"Balão {i+1} [{baloes[i][2]}]: {textos[i]} -> {traducao}") #printa o balão
     spell(draw, traducao, x1, y1, x2, y2, "font/KOMIKAX_.ttf") #Escreve na imagem
 
 image_pil.save("scr_manga/outputs/2.jpeg") #salva a imagem com as alterações
 #print(resumo()) #de onde veio cada tradução
-
