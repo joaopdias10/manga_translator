@@ -284,6 +284,19 @@ def cor_de_fundo(recorte, mascara):
 # 2. Rotas de preenchimento
 # ---------------------------------------------------------------------------
 
+def fundo_da_caixa(recorte, caixa_local):
+    """
+    Cor (BGR) que ficou atras do texto depois da limpeza: mediana da caixa
+    da deteccao no recorte JA LIMPO. Vale para qualquer rota (solido, lama,
+    telea) e e o que o lettering usa para escolher texto claro ou escuro.
+    """
+    x1, y1, x2, y2 = caixa_local
+    area = recorte[max(0, y1):y2, max(0, x1):x2]
+    if area.size == 0:
+        area = recorte
+    return tuple(int(c) for c in np.median(area.reshape(-1, area.shape[-1]), axis=0))
+
+
 def inpaint_solido(recorte, mascara, base=None):
     """
     Preenche com a cor de fundo amostrada. Ideal para balao chapado.
@@ -525,7 +538,8 @@ def limpar_regiao(imagem, caixa, metodo="auto", margem=8, dilatacao=None):
 
     recorte = imagem[ay1:ay2, ax1:ax2]
     if recorte.size == 0:
-        return imagem, {"tipo": "vazio", "metodo": None, "tempo": 0.0}
+        return imagem, {"tipo": "vazio", "metodo": None, "tempo": 0.0,
+                        "fundo": None}
 
     # caixa da deteccao em coordenadas do recorte: ancora o filtro de glifos
     caixa_local = (x1 - ax1, y1 - ay1, x2 - ax1, y2 - ay1)
@@ -538,7 +552,8 @@ def limpar_regiao(imagem, caixa, metodo="auto", margem=8, dilatacao=None):
     # que a regiao ficou intocada - texto residual atras do lettering.
     if not mascara.any():
         return imagem, {"tipo": "vazio", "metodo": "nenhum", "tempo": 0.0,
-                        "cobertura": 0.0}
+                        "cobertura": 0.0,
+                        "fundo": fundo_da_caixa(recorte, caixa_local)}
 
     tipo = classificar_regiao(recorte, base)  # analisa pela mascara crua
 
@@ -578,8 +593,10 @@ def limpar_regiao(imagem, caixa, metodo="auto", margem=8, dilatacao=None):
 
     imagem[ay1:ay2, ax1:ax2] = limpo
     cobertura = float((mascara_fill > 0).mean())
+    # fundo (BGR) que sobrou atras do texto: o lettering escolhe a cor por ele
     return imagem, {"tipo": tipo, "metodo": escolhido, "tempo": tempo,
-                    "cobertura": cobertura}
+                    "cobertura": cobertura,
+                    "fundo": fundo_da_caixa(limpo, caixa_local)}
 
 
 def remover_texto(imagem, caixas, metodo="auto", margem=8, dilatacao=None,

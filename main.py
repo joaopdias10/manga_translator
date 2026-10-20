@@ -5,7 +5,7 @@ from PIL import Image, ImageDraw, ImageFont
 from ultralytics import YOLO
 
 from inpaint.inpainter import remover_texto
-from lettering.lettering import spell
+from lettering.lettering import cores_para_fundo, spell
 from ocr.ocr import IDIOMAS, decidir_idiomas, ler
 from translator.LLM_translator import translate_page
 from translator.translator import resumo, traduzir
@@ -28,6 +28,9 @@ cv2.imwrite("scr_manga/outputs/resultado.jpg", results[0].plot()) #coloca a imag
 caixas = [tuple(map(int, box.xyxy[0])) for box in results[0].boxes]
 image_limpa, relatorio = remover_texto(image, caixas, metodo="auto")
 cv2.imwrite("scr_manga/outputs/pagina_limpa.png", image_limpa) #resultado só da etapa 4
+#fundo que ficou em cada caixa: decide texto preto ou branco na etapa 5.
+#indexado pela caixa (e nao pela posicao) porque `baloes` e filtrado e reordenado
+info_por_caixa = dict(zip(caixas, relatorio))
 
 image_pil = Image.fromarray(cv2.cvtColor(image_limpa, cv2.COLOR_BGR2RGB)) #converte do opencv para pil
 draw = ImageDraw.Draw(image_pil) #objeto de desenho
@@ -60,7 +63,10 @@ traducoes = translate_page(textos, idiomas=idiomas_pagina)
 
 for i, ((x1, y1, x2, y2), traducao) in enumerate(zip([c for c, _, _ in baloes], traducoes)):
     print(f"Balão {i+1} [{baloes[i][2]}]: {textos[i]} -> {traducao}") #printa o balão
-    spell(draw, traducao, x1, y1, x2, y2, "font/KOMIKAX_.ttf") #Escreve na imagem
+    info = info_por_caixa[(x1, y1, x2, y2)]
+    #texto sobre arte ganha contorno: a mediana do fundo nao garante contraste em todo ponto
+    cor, contorno = cores_para_fundo(info.get("fundo"), com_contorno=info["tipo"] == "arte")
+    spell(draw, traducao, x1, y1, x2, y2, "font/KOMIKAX_.ttf", cor=cor, contorno=contorno) #Escreve na imagem
 
 image_pil.save("scr_manga/outputs/2.jpeg") #salva a imagem com as alterações
 #print(resumo()) #de onde veio cada tradução
