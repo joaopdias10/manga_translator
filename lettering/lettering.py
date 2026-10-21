@@ -17,6 +17,8 @@ Otimizações em relação à versão anterior:
   5. Palavras maiores que o balão são fatiadas em vez de vazarem pra fora.
   6. O desenho usa anchor="ma", então não é preciso remedir cada linha só
      para centralizar.
+  7. Quebra de linha balanceada (programação dinâmica, estilo Knuth-Plass)
+     no lugar da gulosa: linhas de comprimento parecido, sem a última curta.
 """
 
 from functools import lru_cache
@@ -88,41 +90,73 @@ def _fatiar_palavra(palavra, largura_de, max_largura):
     return pedacos or [palavra]
 
 
+def _quebrar_trecho(palavras, larguras, largura_espaco, max_largura):
+    """
+    Quebra balanceada, no estilo Knuth-Plass (programacao dinamica).
+
+    A quebra gulosa enche cada linha ao maximo e deixa a ultima curta
+    ("O QUE VOCE ESTA / FAZENDO?"). Aqui cada linha custa (sobra/largura)^3
+    e escolhe-se o conjunto de quebras de menor custo total: o cubo pune
+    muito uma linha quase vazia e pouco varias linhas levemente curtas, o
+    que da blocos de linhas parecidas - o formato que assenta num balao.
+    Linha a mais acrescenta uma largura inteira de sobra, entao a DP nao
+    usa mais linhas que a gulosa a nao ser em casos degenerados.
+
+    Pressupoe que toda palavra cabe sozinha na largura (o _quebrar fatia
+    as que nao cabem antes de chegar aqui).
+    """
+    n = len(palavras)
+    if n == 0:
+        return []
+
+    custo = [0.0] + [float("inf")] * n
+    inicio = [0] * (n + 1)  # inicio[i] = primeira palavra da linha que termina em i-1
+
+    for i in range(1, n + 1):
+        largura = -largura_espaco
+        for j in range(i - 1, -1, -1):
+            largura += larguras[j] + largura_espaco
+            if largura > max_largura and j < i - 1:
+                break
+            sobra = max(0.0, max_largura - largura) / max_largura
+            total = custo[j] + sobra ** 3
+            if total < custo[i]:
+                custo[i], inicio[i] = total, j
+
+    linhas = []
+    i = n
+    while i > 0:
+        j = inicio[i]
+        linhas.append(" ".join(palavras[j:i]))
+        i = j
+    linhas.reverse()
+    return linhas
+
+
 def _quebrar(palavras, largura_de, largura_espaco, max_largura):
     """
-    Monta as linhas acumulando larguras já conhecidas.
+    Monta as linhas a partir das larguras já conhecidas.
     `largura_de` é uma função texto -> largura em pixels.
+
+    Palavra sozinha maior que o balão vira quebra forçada: é fatiada, cada
+    pedaço menos o último ocupa uma linha inteira, e o último começa o
+    trecho seguinte. Cada trecho entre quebras forçadas é balanceado à parte.
     """
     linhas = []
-    atual = []
-    largura_atual = 0.0
+    trecho = []
 
     for palavra in palavras:
-        largura = largura_de(palavra)
-
-        # Palavra sozinha maior que o balão: fatia e segue com o último pedaço.
-        if largura > max_largura:
-            if atual:
-                linhas.append(" ".join(atual))
-                atual, largura_atual = [], 0.0
+        if largura_de(palavra) > max_largura:
+            linhas.extend(_quebrar_trecho(
+                trecho, [largura_de(p) for p in trecho], largura_espaco, max_largura))
             pedacos = _fatiar_palavra(palavra, largura_de, max_largura)
             linhas.extend(pedacos[:-1])
-            atual = [pedacos[-1]]
-            largura_atual = largura_de(pedacos[-1])
-            continue
-
-        extra = largura if not atual else largura_espaco + largura
-        if largura_atual + extra <= max_largura:
-            atual.append(palavra)
-            largura_atual += extra
+            trecho = [pedacos[-1]]
         else:
-            linhas.append(" ".join(atual))
-            atual = [palavra]
-            largura_atual = largura
+            trecho.append(palavra)
 
-    if atual:
-        linhas.append(" ".join(atual))
-
+    linhas.extend(_quebrar_trecho(
+        trecho, [largura_de(p) for p in trecho], largura_espaco, max_largura))
     return linhas
 
 
